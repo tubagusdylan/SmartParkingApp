@@ -1,5 +1,6 @@
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import QPixmap
+from PyQt5.QtCore import Qt
 from proyek_gui import Ui_MainWindow
 from creditWindow import Ui_CreditWindow
 from userGuideWindow import Ui_UserGuideWindow
@@ -8,9 +9,12 @@ from manualWindow2 import Ui_ManualInputOut
 import sys
 import lpr
 from datetime import datetime
+from itertools import islice
 
 # GLobal variabel
 dataVehicle = {"License" : [], "Time" : [], "Status" : []}
+
+dataNota = {"outTime" : None, "numberPlate" : None, "parkingTime" : None, "parkingPrice" : None}
 
 # class untuk fungsionalitas button
 class MainWindow(QMainWindow):
@@ -20,8 +24,13 @@ class MainWindow(QMainWindow):
         self.ui.setupUi(self)
         self.setWindowTitle("Parking App")
 
+        # Tombol add image camera in
         self.ui.add_image_in_button.clicked.connect(self.clickInput)
+        # Tombol add image camera out
         self.ui.add_image_out_buttom.clicked.connect(self.clickOutput)
+
+        # Tombol pay
+        self.ui.pay_button.clicked.connect(self.clicked_pay_button)
 
         # Menu Credit
         self.ui.actionCredits.triggered.connect(self.show_credit_window)
@@ -103,13 +112,44 @@ class MainWindow(QMainWindow):
             row = row+1
         
         row = 0
-        # Loop buat masukin ke table bagian Time
+        # Loop buat masukin ke table bagian Status
         for vehicle in dataVehicle["Status"]:
             item = QTableWidgetItem(vehicle)
             self.ui.data_table.setItem(row, 2, item)
             # print(vehicle)
             row = row+1
-            
+
+    def findIndexOfTableToDelete(self):   
+
+        row = 0
+        # Loop untuk mencari data plat nomor kendaraan yang ada dengan data plat nomor kendaraan yang kelaur
+        for vehicle in dataVehicle["License"]:
+            if vehicle == dataNota["numberPlate"]:
+                index = row
+            row = row + 1
+
+        self.deleteRowInTable(index)
+
+
+    
+    def deleteRowInTable(self, baris):
+        # Menghapus satu baris penuh untuk data kendaraan yang keluar pada tabel 
+        self.ui.data_table.removeRow(baris)
+        
+        # Menghapus data "License", "Time", dan "Status" kendaraan yang keluar pada dictionary
+        del dataVehicle["License"][baris]
+        del dataVehicle["Time"][baris]
+        del dataVehicle["Status"][baris]
+
+        # Mengembalikan "dataNota" menjadi None semua sehingga perulangan proses pembayaran dapat dilakukan dengan sesuai
+        dataNota["outTime"] = None
+        dataNota["numberPlate"] = None
+        dataNota["parkingTime"] = None
+        dataNota["parkingPrice"] = None
+        
+
+
+          
     # ===========================UNTUK TOMBOL INPUT=============================================================
 
     # ===========================UNTUK TOMBOL OUT===============================================================
@@ -141,7 +181,11 @@ class MainWindow(QMainWindow):
             else:
                 # Jalankan fungsi setParkingTime dan setPricing
                 waktu_parkir = self.setParkingTime(waktu_out, isAvail)
-                self.setPricing(waktu_parkir)
+                hh, mm, ss = waktu_parkir.split(':')
+                parking_time_in_sec = int(hh) * 3600 + int(mm) * 60 + int(ss)
+                harga_parkir = self.setPricing(parking_time_in_sec)
+                self.saveDataNota(waktu_out, hasil_out, waktu_parkir, harga_parkir)
+        
             
     # Fungsi untuk mengecek apakah plat nomor yang ingin keluar dari area parkir terdaftar di database atau tidak
     def checkingNumPlate(self, platNumber):
@@ -152,20 +196,24 @@ class MainWindow(QMainWindow):
                 return i    
             i = i+1
         return -1
-    
+
+    # Fungsi untuk memberi tahu berapa lama kendaraan parkir
     def setParkingTime(self, dateTime, index):
         # Waktu pas keluar parkir
         dateTime_out = datetime.strptime(dateTime, "%H:%M:%S")
         # Waktu pas masuk parkir
         dateTime_in = datetime.strptime(dataVehicle["Time"][index], "%H:%M:%S")
         parking_time = str(dateTime_out - dateTime_in)
-
+        # Cetak waktu parkir ke GUI
         self.ui.hasil_waktu.setText("0" + parking_time)
-        return int(parking_time.replace(":", ""))
 
-    # Lanjutin yang ini ya hannnnn
-    def setPricing(self, waktu_parkir):
-        pass
+        return ("0" + parking_time)
+
+    # Fungsi untuk menentukan harga parkir
+    def setPricing(self, parkingTime):
+        price = str(parkingTime * 1)
+        self.ui.hasil_biaya.setText("Rp" + price)
+        return ("Rp"+ price)
 
     def warning_popup(self):
         # membuat popup window menggunakan qmessagebox
@@ -179,6 +227,59 @@ class MainWindow(QMainWindow):
         msg.exec_()
 
     # =============================UNTUK TOMBOL OUT=============================================================
+    # =============================UNTUK TOMBOL PAY=============================================================
+    def saveDataNota(self, jam_keluar, plat_kendaraan, lama_parkir, harga_parkir):
+        self.jam_keluar = jam_keluar
+        self.plat_kendaraan = plat_kendaraan
+        self.lama_parkir = lama_parkir
+        self.harga_parkir = harga_parkir
+
+        dataNota["outTime"] = self.jam_keluar
+        dataNota["numberPlate"] = self.plat_kendaraan
+        dataNota["parkingTime"] = self.lama_parkir
+        dataNota["parkingPrice"] = self.harga_parkir
+
+
+    def clicked_pay_button(self):
+        if dataNota["numberPlate"] is not None:
+            self.ui.hasil_waktu.setText("00:00:00")
+            self.ui.hasil_biaya.setText("Rp0")
+
+            # Mengganti gambar pada label "Kendaraan Keluar" menjadi default (berwarna putih) setelah pembayaran selesai dilakukan
+            self.pixmap = QPixmap()
+            self.ui.output_image.setPixmap(self.pixmap)
+
+            self.nota_pembayaran()
+
+        else:
+            self.warning_pembayaran()
+
+
+    # =============================UNTUK TOMBOL PAY=============================================================
+    # ============================Nota Pembayaran==============================================================
+    def nota_pembayaran(self):
+        # membuat popup window menggunakan qmessagebox
+        msg = QMessageBox()
+        msg.setWindowTitle("Nota Pembayaran Kendaraan Parkir")
+        msg.setText("Biaya Parkir Kendaraan telah dibayar")
+        msg.setIcon(QMessageBox.Information)
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.setDetailedText(f"Plat Kendaraan : {dataNota['numberPlate']}\nWaktu Parkir : {dataNota['parkingTime']}\nHarga Parkir : {dataNota['parkingPrice']}\nJam Keluar Parkir : {dataNota['outTime']}")
+
+        msg.exec_()
+
+        self.findIndexOfTableToDelete()
+    
+    def warning_pembayaran(self):
+        msg = QMessageBox()
+        msg.setWindowTitle("Informasi Nota Pembayaran")
+        msg.setText("Belum ada kendaraan keluar yang terdeteksi")
+        msg.setIcon(QMessageBox.Warning)
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.setDetailedText("Harus ada plat nomor kendaraan yang keluar dari tempat parkir yang terdeteksi sehingga pembayaran dapat dilakukan")
+
+        msg.exec_()
+    # ============================Nota Pembayaran==============================================================
 
     # =============================Pop OUT Warning, plat tidak dapat ditekesi======================================
     def warning_numplate(self):
@@ -266,7 +367,10 @@ class MainWindow(QMainWindow):
             else:
                 # Jalankan fungsi setParkingTime dan setPricing
                 waktu_parkir = self.setParkingTime(waktu, isAvail)
-                self.setPricing(waktu_parkir)
+                hh, mm, ss = waktu_parkir.split(':')
+                parking_time_in_sec = int(hh) * 3600 + int(mm) * 60 + int(ss)
+                harga_parkir = self.setPricing(parking_time_in_sec)
+                self.saveDataNota(waktu, value, waktu_parkir, harga_parkir)
 
             self.uiManualInputOut.lineEdit.setText("")
     # ============================Window Manual Input Out==================================
